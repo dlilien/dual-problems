@@ -1,11 +1,13 @@
 import argparse
 import subprocess
+from icepack.models.viscosity import Q_warm
 import numpy as np
 from numpy import pi as π
 import xarray
 import firedrake
-from firedrake import assemble, Constant, exp, max_value, inner, grad, dx, ds, dS
+from firedrake import assemble, Constant, exp, max_value, inner, dx, ds_v, dS_v
 import icepack
+from icepack.calculus import grad
 from icepack2.constants import (
     glen_flow_law as n,
     weertman_sliding_law as m,
@@ -14,36 +16,56 @@ from icepack2.constants import (
 )
 from icepack2 import model
 
+TEST = True
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", default="kangerdlugssuaq-extrapolated.h5")
-parser.add_argument("--timesteps-per-year", type=int, default=96)
-parser.add_argument("--final-time", type=float, default=0.5)
+parser.add_argument("--timesteps-per-year", type=int, default=192)
+parser.add_argument("--final-time", type=float, default=1)
 parser.add_argument("--degree", type=int, default=1)
 parser.add_argument("--calving", action="store_true")
 parser.add_argument("--melt-rate", type=float, default=3e3)
 parser.add_argument("--mask-smoothing-length", type=float, default=5e3)
 parser.add_argument("--snes-max-it", type=int, default=200)
-parser.add_argument("--snes-rtol", type=float, default=1e-5)
-parser.add_argument("--output", default="kangerdlugssuaq-simulation.h5")
+parser.add_argument("--snes-rtol", type=float, default=1e-6)
+parser.add_argument("--output", default="kangerdlugssuaq-year1-3d.h5")
 args = parser.parse_args()
 
 # Read in the starting data
 with firedrake.CheckpointFile(args.input, "r") as chk:
-    mesh = chk.load_mesh()
-    q = chk.load_function(mesh, name="log_friction")
+    mesh2d = chk.load_mesh()
+    q2d = chk.load_function(mesh2d, name="log_friction")
     τ_c = chk.h5pyfile.attrs["mean_stress"]
     u_c = chk.h5pyfile.attrs["mean_speed"]
 
     timesteps = np.array(chk.h5pyfile["timesteps"])
-    u = chk.load_function(mesh, name="velocity", idx=len(timesteps) - 1)
-    h = chk.load_function(mesh, name="thickness", idx=len(timesteps) - 1)
+    u2d = chk.load_function(mesh2d, name="velocity", idx=len(timesteps) - 1)
+    h2d = chk.load_function(mesh2d, name="thickness", idx=len(timesteps) - 1)
+mesh = firedrake.ExtrudedMesh(mesh2d, layers=1)
 
-Q = firedrake.FunctionSpace(mesh, "CG", args.degree)
-Δ = firedrake.FunctionSpace(mesh, "DG", args.degree)
-V = firedrake.VectorFunctionSpace(mesh, "CG", args.degree)
-Σ = firedrake.TensorFunctionSpace(mesh, "DG", args.degree - 1, symmetry=True)
-T = firedrake.VectorFunctionSpace(mesh, "DG", args.degree - 1)
+
+Q = firedrake.FunctionSpace(mesh, "CG", args.degree, vfamily="R", vdegree=0)
+Δ = firedrake.FunctionSpace(mesh, "DG", args.degree, vfamily="R", vdegree=0)
+V = firedrake.VectorFunctionSpace(mesh, "CG", args.degree, dim=2, vfamily="R", vdegree=0)
+Σ = firedrake.TensorFunctionSpace(mesh, "DG", args.degree - 1, shape=(2, 2), symmetry=True, vfamily="R", vdegree=0)
+T = firedrake.VectorFunctionSpace(mesh, "DG", args.degree - 1, dim=2, vfamily="R", vdegree=0)
 Z = V * Σ * T
+
+if TEST:
+    Q2d = firedrake.FunctionSpace(mesh2d, "CG", args.degree)
+    Δ2d = firedrake.FunctionSpace(mesh2d, "DG", args.degree)
+    V2d = firedrake.VectorFunctionSpace(mesh2d, "CG", args.degree)
+    Σ2d = firedrake.TensorFunctionSpace(mesh2d, "DG", args.degree - 1, symmetry=True)
+    T2d = firedrake.VectorFunctionSpace(mesh2d, "DG", args.degree - 1)
+
+    for fs3d, fs2d in zip([Q, Δ, V, Σ, T], [Q2d, Δ2d, V2d, Σ2d, T2d]):
+        qs3d = firedrake.Function(fs3d)
+        qs2d = firedrake.Function(fs2d)
+        assert qs3d.dat.data_ro.shape == qs2d.dat.data_ro.shape
+
+u = icepack.lift3d(u2d, V)
+h = icepack.lift3d(h2d, Q)
+q = icepack.lift3d(q2d, Q)
 
 u_in = firedrake.project(u, V)
 q = firedrake.project(q, Q)
@@ -199,10 +221,10 @@ h0 = h.copy(deepcopy=True)
 dt = Constant(1.0 / args.timesteps_per_year)
 flux_cells = ((h - h_n) / dt * φ - inner(h * u, grad(φ)) - a * φ) * dx
 ν = firedrake.FacetNormal(mesh)
-f = h * max_value(0, inner(u, ν))
-flux_facets = (f("+") - f("-")) * (φ("+") - φ("-")) * dS
-flux_in = h0 * firedrake.min_value(0, inner(u, ν)) * φ * ds
-flux_out = h * max_value(0, inner(u, ν)) * φ * ds
+f = h * max_value(0, u[0] * ν[0] + u[1] * ν[1])
+flux_facets = (f("+") - f("-")) * (φ("+") - φ("-")) * dS_v
+flux_in = h0 * firedrake.min_value(0, u[0] * ν[0] + u[1] * ν[1]) * φ * ds_v
+flux_out = h * max_value(0, u[0] * ν[0] + u[1] * ν[1]) * φ * ds_v
 G = flux_cells + flux_facets + flux_in + flux_out
 h_problem = firedrake.NonlinearVariationalProblem(G, h)
 h_solver = firedrake.NonlinearVariationalSolver(h_problem)
@@ -213,6 +235,7 @@ num_steps = int(args.final_time * args.timesteps_per_year) + 1
 with firedrake.CheckpointFile(args.output, "w") as chk:
     u, M, τ = z.subfunctions
     chk.save_function(h, name="thickness", idx=0)
+    chk.save_function(s, name="surface", idx=0)
     chk.save_function(u, name="velocity", idx=0)
     chk.save_function(M, name="membrane_stress", idx=0)
     chk.save_function(τ, name="basal_stress", idx=0)
@@ -234,6 +257,7 @@ with firedrake.CheckpointFile(args.output, "w") as chk:
         # Save the results to disk
         u, M, τ = z.subfunctions
         chk.save_function(h, name="thickness", idx=step + 1)
+        chk.save_function(s, name="surface", idx=step + 1)
         chk.save_function(u, name="velocity", idx=step + 1)
         chk.save_function(M, name="membrane_stress", idx=step + 1)
         chk.save_function(τ, name="basal_stress", idx=step + 1)

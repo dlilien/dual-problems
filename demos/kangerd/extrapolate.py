@@ -69,8 +69,7 @@ J = 0.5 * (μ * inner(q - Eq, q - Eq) + α**2 * inner(grad(q), grad(q))) * dx
 F = firedrake.derivative(J, q)
 firedrake.solve(F == 0, q, bc)
 
-# Read in the thickness and surface data and project them onto the larger mesh
-bedmachine = xarray.open_dataset(icepack.datasets.fetch_bedmachine_greenland())
+bedmachine = xarray.open_dataset("/Volumes/LaCie/Data/greenland_general/bedmachine/BedMachineGreenland-v6.nc")
 h_obs = icepack.interpolate(bedmachine["thickness"], Q)
 
 h = h_obs.copy(deepcopy=True)

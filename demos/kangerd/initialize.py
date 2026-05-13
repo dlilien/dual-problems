@@ -43,7 +43,7 @@ V = firedrake.VectorFunctionSpace(mesh, "CG", args.degree)
 print("done generating mesh")
 
 # Read the thickness and surface data
-bedmachine = xarray.open_dataset(icepack.datasets.fetch_bedmachine_greenland())
+bedmachine = xarray.open_dataset("/Volumes/LaCie/Data/greenland_general/bedmachine/BedMachineGreenland-v6.nc")
 h_obs = icepack.interpolate(bedmachine["thickness"], Q)
 s_obs = icepack.interpolate(bedmachine["surface"], Q)
 
@@ -67,7 +67,7 @@ extent = {
     "bottom": coords[:, 1].min() - delta,
     "top": coords[:, 1].max() + delta,
 }
-measures_filenames = icepack.datasets.fetch_measures_greenland()
+measures_filenames = [f"/Volumes/LaCie/Data/greenland_general/velocity/multiyear/greenland_vel_mosaic200_2015_2016_{key}_v02.1.tif" for key in ["vx", "vy", "ex", "ey"]]
 
 velocity_data = {}
 for key in ["vx", "vy", "ex", "ey"]:
@@ -186,6 +186,28 @@ opts = {
         "ksp_type": "gmres",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
+    },
+}
+
+opts = {
+    "dirichlet_ids": [1, 2, 3, 4],
+    "diagnostic_solver_type": "petsc",
+    "diagnostic_solver_parameters": {
+        "snes_type": "newtontr",
+        "snes_tr_delta0": 1.0e5,
+        "snes_tr_fallback_type": "dogleg",
+        "snes_max_it": 5000,
+        "snes_stol": 1.0e-8,
+        "snes_rtol": 1.0e-8,
+        "snes_atol": 1.0e-3,
+        "ksp_type": "bcgs",
+        "ksp_max_it": 100000,
+        "ksp_rtol": 1.0e-16,
+        "ksp_atol": 1.0e-16,
+        "pc_type": "bjacobi",
+        "pc_hypre_type": "boomeramg",
+        "pc_factor_mat_solver_type": "mumps",
+        "pc_factor_shift_amount": 1.0e-10,
     },
 }
 flow_solver = icepack.solvers.FlowSolver(flow_model, **opts)
