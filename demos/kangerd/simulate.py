@@ -216,6 +216,7 @@ with firedrake.CheckpointFile(args.output, "w") as chk:
     chk.save_function(u, name="velocity", idx=0)
     chk.save_function(M, name="membrane_stress", idx=0)
     chk.save_function(τ, name="basal_stress", idx=0)
+    chk.save_function(s, name="surface", idx=0)
     if args.calving:
         chk.save_function(μ, name="ice_mask", idx=0)
 
@@ -235,6 +236,7 @@ with firedrake.CheckpointFile(args.output, "w") as chk:
         u, M, τ = z.subfunctions
         chk.save_function(h, name="thickness", idx=step + 1)
         chk.save_function(u, name="velocity", idx=step + 1)
+        chk.save_function(s, name="surface", idx=step + 1)
         chk.save_function(M, name="membrane_stress", idx=step + 1)
         chk.save_function(τ, name="basal_stress", idx=step + 1)
         if args.calving:

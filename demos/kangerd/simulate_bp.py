@@ -19,10 +19,10 @@ from icepack2 import model
 import irksome
 
 TEST = True
-CUSTOMH = False
+CUSTOMH = True
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--input", default="kangerdlugssuaq-extrapolated.h5")
+parser.add_argument("--input", default="kangerdlugssuaq-extrapolated-bp.h5")
 parser.add_argument("--timesteps-per-year", type=int, default=192)
 parser.add_argument("--final-time", type=float, default=1.0)
 parser.add_argument("--degree", type=int, default=1)
@@ -32,41 +32,40 @@ parser.add_argument("--mask-smoothing-length", type=float, default=5e3)
 parser.add_argument("--snes-max-it", type=int, default=2500)
 parser.add_argument("--snes-rtol", type=float, default=1e-6)
 parser.add_argument("--output", default="kangerdlugssuaq-year1-bp.h5")
-parser.add_argument("--vdegree", type=int, default=1)
+parser.add_argument("--vdegree", type=int, default=2)
+parser.add_argument("--debug", action="store_true")
 args = parser.parse_args()
+
+timesteps_per_year = args.timesteps_per_year
 
 # Read in the starting data
 with firedrake.CheckpointFile(args.input, "r") as chk:
-    mesh2d = chk.load_mesh()
-    q2d = chk.load_function(mesh2d, name="log_friction")
+    mesh = chk.load_mesh("kangerdlugssuaq_enlarged")
+    q = chk.load_function(mesh, name="log_friction")
     τ_c = chk.h5pyfile.attrs["mean_stress"]
     u_c = chk.h5pyfile.attrs["mean_speed"]
 
     timesteps = np.array(chk.h5pyfile["timesteps"])
-    u2d = chk.load_function(mesh2d, name="velocity", idx=len(timesteps) - 1)
-    h2d = chk.load_function(mesh2d, name="thickness", idx=len(timesteps) - 1)
-mesh = firedrake.ExtrudedMesh(mesh2d, layers=1)
-
-Q_dc = firedrake.FunctionSpace(mesh, "CG", args.degree, vfamily="R", vdegree=0)
-V_dc = firedrake.VectorFunctionSpace(mesh, "CG", args.degree, dim=2, vfamily="R", vdegree=0)
+    u = chk.load_function(mesh, name="velocity", idx=len(timesteps) - 1)
+    h = chk.load_function(mesh, name="thickness", idx=len(timesteps) - 1)
 
 if args.vdegree == 0:
     vfamily = "R"
 else:
-    vfamily = "CG"
+    vfamily = "DG"
 
 Q = firedrake.FunctionSpace(mesh, "CG", args.degree, vfamily="R", vdegree=0)
-Δ = firedrake.FunctionSpace(mesh, "CG", args.degree, vfamily="R", vdegree=0)
+Δ = firedrake.FunctionSpace(mesh, "DG", args.degree, vfamily="R", vdegree=0)
 V = firedrake.VectorFunctionSpace(mesh, "CG", args.degree, dim=2, vfamily=vfamily, vdegree=args.vdegree)
-Σx = firedrake.TensorFunctionSpace(mesh, "DG", args.degree - 1, shape=(2, 2), symmetry=True, vfamily="R", vdegree=0)
-T = firedrake.VectorFunctionSpace(mesh, "DG", args.degree - 1, dim=2, vfamily="R", vdegree=0)
-Z = V * Σx * T * T
+Σx = firedrake.TensorFunctionSpace(mesh, "DG", args.degree - 1, shape=(2, 2), symmetry=True, vfamily=vfamily, vdegree=max(0, args.vdegree - 1))
+T = firedrake.VectorFunctionSpace(mesh, "DG", args.degree - 1, dim=2, vfamily=vfamily, vdegree=max(0, args.vdegree - 1))
+T0 = firedrake.VectorFunctionSpace(mesh, "DG", args.degree - 1, dim=2, vfamily="R", vdegree=0)
+Z = V * Σx * T * T0
 
-u_dc = icepack.lift3d(u2d, V_dc)
-h = icepack.lift3d(h2d, Q)
-q = icepack.lift3d(q2d, Q)
+h = firedrake.Function(Q).interpolate(h)
+q = firedrake.Function(Q).interpolate(q)
 
-u = firedrake.project(u_dc, V)
+u = firedrake.Function(V).interpolate(u)
 u_in = u.copy(deepcopy=True)
 
 z = firedrake.Function(Z)
@@ -77,14 +76,8 @@ bedmachine = xarray.open_dataset(icepack.datasets.fetch_bedmachine_greenland())
 b = icepack.interpolate(bedmachine["bed"], Q)
 h = firedrake.project(h, Δ)
 s = firedrake.project(max_value(b + h, (1 - ρ_I / ρ_W) * h), Δ)
-s0 = s.copy(deepcopy=True)
-alpha = Constant(2e1)
-J_smooth = 0.5 * ((s - s0) ** 2 + alpha**2 * inner(grad(s), grad(s))) * dx
-F_smooth = firedrake.derivative(J_smooth, s)
-firedrake.solve(F_smooth == 0, s)
-h.interpolate(firedrake.conditional(abs(s0 - (1 - ρ_I / ρ_W) * h) < 10, h, s - b))
 
-rheology_steps = 3
+rheology_steps = 5
 ms = np.linspace(1.0, weertman_sliding_law, rheology_steps)
 ns = np.linspace(1.0, glen_flow_law, rheology_steps)
 
@@ -122,14 +115,14 @@ rheology = {
     "flow_law_exponent": n_flow,
     "flow_law_coefficient": ε_c / τ_c**n_flow,
     "sliding_exponent": m_slide,
-    "sliding_coefficient": u_c / τ_c**m_slide * exp(m_slide * q) / firedrake.Constant(1.0e3 ** args.vdegree),
+    "sliding_coefficient": u_c / τ_c**m_slide * exp(m_slide * q),
 }
 
 linear_rheology = {
     "flow_law_exponent": 1,
     "flow_law_coefficient": ε_c / τ_c,
     "sliding_exponent": 1,
-    "sliding_coefficient": u_c / τ_c * exp(q) / firedrake.Constant(1.0e3 ** args.vdegree),
+    "sliding_coefficient": u_c / τ_c * exp(q),
 }
 
 # L_1 = hybrid.HybridModel(calving_terminus=None).action(**fields, **linear_rheology)
@@ -156,7 +149,7 @@ problem_params = {
 }
 solver_params = {
     "solver_parameters": {
-        "snes_monitor": None,
+        #"snes_linesearch_monitor": None,
         #"snes_converged_reason": None,
         #"ksp_monitor": None,
         #"ksp_view": None,
@@ -171,6 +164,9 @@ solver_params = {
         "pc_factor_mat_solver_type": "umfpack",
     },
 }
+if args.debug:
+    solver_params["solver_parameters"]["snes_monitor"] = None
+    solver_params["solver_parameters"]["ksp_monitor"] = None
 # firedrake.solve(F_1 == 0, z, **problem_params, **solver_params)
 
 u_problem = firedrake.NonlinearVariationalProblem(F, z, **problem_params)  # may need to add J=J here
@@ -221,7 +217,7 @@ else:
     a = smb
 
 h0 = h.copy(deepcopy=True)
-dt = Constant(1.0 / args.timesteps_per_year)
+dt = Constant(1.0 / timesteps_per_year)
 
 
 # Set up the mass balance equation
@@ -261,7 +257,7 @@ else:
 
 # Run the simulation
 h_c = Constant(5.0)
-num_steps = int(args.final_time * args.timesteps_per_year) + 1
+num_steps = int(args.final_time * timesteps_per_year) + 1
 with firedrake.CheckpointFile(args.output, "w") as chk:
     u, Mx, Mz, τ = z.subfunctions
     chk.save_function(h, name="thickness", idx=0)
@@ -291,10 +287,13 @@ with firedrake.CheckpointFile(args.output, "w") as chk:
         # h.interpolate(firedrake.conditional(h < h_c, 0, h))
         s.interpolate(max_value(b + h, (1 - ρ_I / ρ_W) * h))
         try:
-            for rheo_step in range(rheology_steps):
-                m_slide.assign(ms[rheo_step])
-                n_flow.assign(ns[rheo_step])
+            try:
                 u_solver.solve()
+            except Exception as e:
+                for rheo_step in range(rheology_steps):
+                    m_slide.assign(ms[rheo_step])
+                    n_flow.assign(ns[rheo_step])
+                    u_solver.solve()
         except Exception as e:
             raise e
         finally:

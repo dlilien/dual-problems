@@ -48,6 +48,7 @@ V = firedrake.VectorFunctionSpace(mesh, "CG", 1, vdegree=2, dim=2)
 Δ = firedrake.FunctionSpace(mesh, "DG", 1, vfamily="R", vdegree=0)
 Σx = firedrake.TensorFunctionSpace(mesh, "DG", 0, shape=(2, 2), symmetry=True, vfamily="R", vdegree=0)
 T = firedrake.VectorFunctionSpace(mesh, "DG", 0, dim=2, vfamily="R", vdegree=0)
+
 Z = V * Σx * T
 
 Q2d = firedrake.FunctionSpace(mesh2d, "DG", 1)

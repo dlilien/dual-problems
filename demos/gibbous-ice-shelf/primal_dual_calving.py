@@ -7,7 +7,7 @@ import firedrake
 from firedrake import inner, derivative
 import irksome
 import icepack
-from icepack2 import model, solvers
+from icepack2 import model
 from icepack2.constants import glen_flow_law as n
 
 parser = argparse.ArgumentParser()
@@ -85,7 +85,7 @@ elif args.form == "dual":
         "thickness": h,
     }
 
-    fns = [model.viscous_power, model.ice_shelf_momentum_balance]
+    fns = [model.minimization.viscous_power, model.minimization.ice_shelf_momentum_balance]
 
     rheology = {
         "flow_law_exponent": n,

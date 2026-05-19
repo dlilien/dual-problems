@@ -110,7 +110,7 @@ def symmetric_limits(functions):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--idx", type=int, default=100)
-    parser.add_argument("--input-2d", default="steady-state-coarse-3d.h5")
+    parser.add_argument("--input-2d", default="steady-state-coarse.h5")
     parser.add_argument("--input-3d", default="steady-state-coarse-bp.h5")
     parser.add_argument("--output", default="compare")
     args, petsc_args = parser.parse_known_args()

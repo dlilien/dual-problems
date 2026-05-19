@@ -46,14 +46,22 @@ def load(filename, requested_idx, extruded=False):
             mesh = chk.load_mesh()
 
         velocity = chk.load_function(mesh, name="velocity", idx=idx)
-        thickness = chk.load_function(mesh, name="thickness", idx=idx)
-        surface = chk.load_function(mesh, name="surface", idx=idx)
+        try:
+            thickness = chk.load_function(mesh, name="thickness", idx=idx)
+        except (KeyError, RuntimeError):
+            thickness = None
+        try:
+            surface = chk.load_function(mesh, name="surface", idx=idx)
+        except (KeyError, RuntimeError):
+            surface = None
     if velocity.function_space().mesh().topological_dimension() == 3:
         da_vel = icepack.depth_average(velocity)
         b_vel = extract_bed(velocity)
         t_vel = extract_surface(velocity)
-        thickness = icepack.depth_average(thickness)
-        surface = icepack.depth_average(surface)
+        if thickness is not None:
+            thickness = icepack.depth_average(thickness)
+        if surface is not None:
+            surface = icepack.depth_average(surface)
         return da_vel, thickness, surface, idx, num_indices, b_vel, t_vel
     else:
         return velocity, thickness, surface, idx, num_indices, velocity, velocity
@@ -67,15 +75,29 @@ def checkpoint_metadata(filename):
     return timesteps, num_indices
 
 
+def usable_indices(timesteps, num_indices):
+    return min(len(timesteps), num_indices)
+
+
+def matching_time_index(timesteps, time, filename):
+    if len(timesteps) == 0:
+        raise RuntimeError(f"No timesteps found in {filename}")
+
+    return int(np.argmin(np.abs(timesteps - time)))
+
+
 def input_tag(filename):
-    return "-".join(Path(filename).stem.split("-")[2:])
+    tag = "-".join(Path(filename).stem.split("-")[2:])
+    return tag or "2d"
 
 
 def model_label(filename):
     tag = Path(filename).stem.split("-")[-1]
     if tag == "3d":
         return "3D SSA"
-    if tag == "bp":
+    if tag[:2] == "bp":
+        if len(tag) >= 4:
+            return f"3D BP (vdegree={tag.split('v')[-1]})"
         return "3D BP"
     return "2D"
 
@@ -94,18 +116,30 @@ def symmetric_limits(functions):
 
 
 def load_comparison(input_2d, input_3d, idx):
+    timesteps_2d, num_2d = checkpoint_metadata(input_2d)
+    timesteps_3d, num_3d = checkpoint_metadata(input_3d)
+    num_usable_2d = usable_indices(timesteps_2d, num_2d)
+    num_usable_3d = usable_indices(timesteps_3d, num_3d)
+    if num_usable_2d == 0:
+        raise RuntimeError(f"No checkpointed indices found in {input_2d}")
+    if num_usable_3d == 0:
+        raise RuntimeError(f"No checkpointed indices found in {input_3d}")
+
+    idx_2d_requested = min(idx, num_usable_2d - 1)
+    time = timesteps_2d[idx_2d_requested]
+    idx_3d_requested = matching_time_index(
+        timesteps_3d[:num_usable_3d], time, input_3d
+    )
     u_3d_da, h_3d, s_3d, idx_3d, num_3d, u_3d_b, u_3d_t = load(
-        input_3d, idx, extruded=True
+        input_3d, idx_3d_requested, extruded=True
     )
     try:
-        u_2d_da, h_2d, s_2d, idx_2d, num_2d, u_2d_b, u_2d_t = load(input_2d, idx_3d)
+        u_2d_da, h_2d, s_2d, idx_2d, num_2d, u_2d_b, u_2d_t = load(
+            input_2d, idx_2d_requested
+        )
     except RuntimeError:
         u_2d_da, h_2d, s_2d, idx_2d, num_2d, u_2d_b, u_2d_t = load(
-            input_2d, idx_3d, extruded=True
-        )
-    if idx_3d != idx_2d:
-        u_3d_da, h_3d, s_3d, idx_3d, num_3d, u_3d_b, u_3d_t = load(
-            input_3d, idx_2d, extruded=True
+            input_2d, idx_2d_requested, extruded=True
         )
 
     return {
@@ -120,6 +154,8 @@ def load_comparison(input_2d, input_3d, idx):
         "s_3d": s_3d,
         "idx_3d": idx_3d,
         "num_3d": num_3d,
+        "time": time,
+        "time_3d": timesteps_3d[idx_3d],
     }
 
 
@@ -203,7 +239,7 @@ def plot_movie_frame(fig, input_2d, input_3d, timesteps, idx, limits):
 
     fig.clear()
     axes = fig.subplots(nrows=2, ncols=2, sharex=True, sharey=True)
-    fig.suptitle(f"Time = {timesteps[idx]:.6g} yr")
+    fig.suptitle(f"Time = {comparison['time']:.6g} yr")
     axes[0, 0].set_title(f"{label_3d} velocity magnitude")
     axes[0, 1].set_title(f"{label_3d} - {label_2d}")
     axes[1, 0].set_title(f"{label_3d} thickness")
@@ -283,7 +319,7 @@ def main():
     parser.add_argument("--input-3d", default="kangerdlugssuaq-year1-bp.h5")
     parser.add_argument("--output", default="compare")
     parser.add_argument("--movie-fps", type=int, default=12)
-    parser.add_argument("--no-movie", action="store_true")
+    parser.add_argument("--movie", action="store_true")
     args, petsc_args = parser.parse_known_args()
     sys.argv = [sys.argv[0], *petsc_args]
     global firedrake, icepack, tripcolor, extract_surface, extract_bed
@@ -311,20 +347,28 @@ def main():
     s_3d = comparison["s_3d"]
     idx_3d = comparison["idx_3d"]
     num_3d = comparison["num_3d"]
+    time = comparison["time"]
+    time_3d = comparison["time_3d"]
     output_prefix = f"{args.output}_{input_tag(args.input_2d)}_{input_tag(args.input_3d)}"
     output = f"{output_prefix}_{idx_2d}"
 
     if idx_2d != args.idx:
         print(f"{input_2d}: requested idx={args.idx}, using idx={idx_2d} of {num_2d}")
-    if idx_3d != args.idx:
-        print(f"{input_3d}: requested idx={args.idx}, using idx={idx_3d} of {num_3d}")
+    print(
+        f"matched {input_2d} idx={idx_2d} time={time:.6g} yr",
+        f"to {input_3d} idx={idx_3d} time={time_3d:.6g} yr",
+    )
 
     velocities = [u_2d_t, u_3d_t]
     thicknesses = [h_2d, h_3d]
     surfaces = [s_2d, s_3d]
     velocity_difference = firedrake.Function(u_2d_t).interpolate(u_2d_t - firedrake.Function(u_2d_t).interpolate(u_3d_t))
-    thickness_difference = firedrake.Function(h_2d).interpolate(h_2d - firedrake.Function(h_2d).interpolate(h_3d))
-    surface_difference = firedrake.Function(s_2d).interpolate(s_2d - firedrake.Function(s_2d).interpolate(s_3d))
+    has_thickness = all(thickness is not None for thickness in thicknesses)
+    has_surface = all(surface is not None for surface in surfaces)
+    if has_thickness:
+        thickness_difference = firedrake.Function(h_2d).interpolate(h_2d - firedrake.Function(h_2d).interpolate(h_3d))
+    if has_surface:
+        surface_difference = firedrake.Function(s_2d).interpolate(s_2d - firedrake.Function(s_2d).interpolate(s_3d))
     label_2d = model_label(args.input_2d)
     label_3d = model_label(args.input_3d)
 
@@ -454,137 +498,137 @@ def main():
 
     fig.savefig(output + f"-sliding.pdf", bbox_inches="tight")
 
-    fig, axes = plt.subplots(
-        nrows=1,
-        ncols=3,
-        figsize=(12.0, 4),
-        sharex=True,
-        sharey=True,
-        constrained_layout=True,
-    )
-    vmax = max(float(np.max(np.abs(thickness.dat.data_ro))) for thickness in thicknesses)
-    vmin = 0
-    dhmin, dhmax = symmetric_limits([thickness_difference])
-    for col, label in enumerate(labels):
-        axes[col].set_title(label)
-
-    colors = []
-    for col, thickness in enumerate(thicknesses):
-        axes[col].set_aspect("equal")
-        axes[col].set_xlabel("x (m)")
-        axes[col].set_ylabel("y (m)")
-        color = tripcolor(
-            thickness,
-            axes=axes[col],
-            cmap="viridis",
-            vmin=vmin,
-            vmax=vmax,
-            num_sample_points=4,
-        )
-        colors.append(color)
-
-    axes[2].set_aspect("equal")
-    axes[2].set_xlabel("x (m)")
-    axes[2].set_ylabel("y (m)")
-    diff_color = tripcolor(
-        thickness_difference,
-        axes=axes[2],
-        cmap="PiYG",
-        vmin=dhmin,
-        vmax=dhmax,
-        num_sample_points=4,
-    )
-
-    fig.colorbar(
-        colors[0],
-        ax=axes[:2],
-        label="Thickness (m)",
-        shrink=0.92,
-    )
-    fig.colorbar(
-        diff_color,
-        ax=axes[2],
-        label="Thickness difference (m)",
-        shrink=0.92,
-    )
-
-    fig.savefig(output + f"-thick.pdf", bbox_inches="tight")
-
-    fig, axes = plt.subplots(
-        nrows=1,
-        ncols=3,
-        figsize=(12.0, 4),
-        sharex=True,
-        sharey=True,
-        constrained_layout=True,
-    )
-    vmax = max(float(np.max(np.abs(surface.dat.data_ro))) for surface in surfaces)
-    vmin = 0
-    dhmin, dhmax = symmetric_limits([surface_difference])
-    for col, label in enumerate(labels):
-        axes[col].set_title(label)
-
-    colors = []
-    for col, surface in enumerate(surfaces):
-        axes[col].set_aspect("equal")
-        axes[col].set_xlabel("x (m)")
-        axes[col].set_ylabel("y (m)")
-        color = tripcolor(
-            surface,
-            axes=axes[col],
-            cmap="viridis",
-            vmin=vmin,
-            vmax=vmax,
-            num_sample_points=4,
-        )
-        colors.append(color)
-
-    axes[2].set_aspect("equal")
-    axes[2].set_xlabel("x (m)")
-    axes[2].set_ylabel("y (m)")
-    diff_color = tripcolor(
-        surface_difference,
-        axes=axes[2],
-        cmap="PiYG",
-        vmin=dhmin,
-        vmax=dhmax,
-        num_sample_points=4,
-    )
-
-    fig.colorbar(
-        colors[0],
-        ax=axes[:2],
-        label="Surface (m)",
-        shrink=0.92,
-    )
-    fig.colorbar(
-        diff_color,
-        ax=axes[2],
-        label="Surface difference (m)",
-        shrink=0.92,
-    )
-
-    fig.savefig(output + f"-surf.pdf", bbox_inches="tight")
     outputs = [
-        f"{output}-surf.pdf",
-        f"{output}-thick.pdf",
         f"{output}-vel.pdf",
         f"{output}-sliding.pdf",
     ]
-    if not args.no_movie:
-        timesteps_2d, movie_num_2d = checkpoint_metadata(input_2d)
-        timesteps_3d, movie_num_3d = checkpoint_metadata(input_3d)
-        num_movie_frames = min(
-            len(timesteps_2d),
-            len(timesteps_3d),
-            movie_num_2d,
-            movie_num_3d,
+    if has_thickness:
+        fig, axes = plt.subplots(
+            nrows=1,
+            ncols=3,
+            figsize=(12.0, 4),
+            sharex=True,
+            sharey=True,
+            constrained_layout=True,
         )
+        vmax = max(float(np.max(np.abs(thickness.dat.data_ro))) for thickness in thicknesses)
+        vmin = 0
+        dhmin, dhmax = symmetric_limits([thickness_difference])
+        for col, label in enumerate(labels):
+            axes[col].set_title(label)
+
+        colors = []
+        for col, thickness in enumerate(thicknesses):
+            axes[col].set_aspect("equal")
+            axes[col].set_xlabel("x (m)")
+            axes[col].set_ylabel("y (m)")
+            color = tripcolor(
+                thickness,
+                axes=axes[col],
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+                num_sample_points=4,
+            )
+            colors.append(color)
+
+        axes[2].set_aspect("equal")
+        axes[2].set_xlabel("x (m)")
+        axes[2].set_ylabel("y (m)")
+        diff_color = tripcolor(
+            thickness_difference,
+            axes=axes[2],
+            cmap="PiYG",
+            vmin=dhmin,
+            vmax=dhmax,
+            num_sample_points=4,
+        )
+
+        fig.colorbar(
+            colors[0],
+            ax=axes[:2],
+            label="Thickness (m)",
+            shrink=0.92,
+        )
+        fig.colorbar(
+            diff_color,
+            ax=axes[2],
+            label="Thickness difference (m)",
+            shrink=0.92,
+        )
+
+        fig.savefig(output + f"-thick.pdf", bbox_inches="tight")
+        outputs.append(f"{output}-thick.pdf")
+    else:
+        print("skipping thickness plot because thickness is missing from an input")
+
+    if has_surface:
+        fig, axes = plt.subplots(
+            nrows=1,
+            ncols=3,
+            figsize=(12.0, 4),
+            sharex=True,
+            sharey=True,
+            constrained_layout=True,
+        )
+        vmax = max(float(np.max(np.abs(surface.dat.data_ro))) for surface in surfaces)
+        vmin = 0
+        dhmin, dhmax = symmetric_limits([surface_difference])
+        for col, label in enumerate(labels):
+            axes[col].set_title(label)
+
+        colors = []
+        for col, surface in enumerate(surfaces):
+            axes[col].set_aspect("equal")
+            axes[col].set_xlabel("x (m)")
+            axes[col].set_ylabel("y (m)")
+            color = tripcolor(
+                surface,
+                axes=axes[col],
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+                num_sample_points=4,
+            )
+            colors.append(color)
+
+        axes[2].set_aspect("equal")
+        axes[2].set_xlabel("x (m)")
+        axes[2].set_ylabel("y (m)")
+        diff_color = tripcolor(
+            surface_difference,
+            axes=axes[2],
+            cmap="PiYG",
+            vmin=dhmin,
+            vmax=dhmax,
+            num_sample_points=4,
+        )
+
+        fig.colorbar(
+            colors[0],
+            ax=axes[:2],
+            label="Surface (m)",
+            shrink=0.92,
+        )
+        fig.colorbar(
+            diff_color,
+            ax=axes[2],
+            label="Surface difference (m)",
+            shrink=0.92,
+        )
+
+        fig.savefig(output + f"-surf.pdf", bbox_inches="tight")
+        outputs.append(f"{output}-surf.pdf")
+    else:
+        print("skipping surface plot because surface is missing from an input")
+    if args.movie:
+        timesteps_2d, movie_num_2d = checkpoint_metadata(input_2d)
+        num_movie_frames = usable_indices(timesteps_2d, movie_num_2d)
         movie_output = f"{output_prefix}.mp4"
         plot_bp_movie(
             input_2d,
             input_3d,
-            timesteps_3d[:num_movie_frames],
+            timesteps_2d[:num_movie_frames],
             num_movie_frames,
             movie_output,
             args.movie_fps,
