@@ -435,3 +435,5 @@ TSWLatexianTemp*
 
 # Makeindex log files
 *.lpz
+
+*.un~

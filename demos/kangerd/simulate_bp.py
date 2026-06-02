@@ -1,11 +1,11 @@
 import argparse
 import tqdm
-from icepack.models.viscosity import Q_warm
 import numpy as np
 from numpy import pi as π
 import xarray
 import firedrake
-from firedrake import assemble, Constant, exp, max_value, inner, dx, ds_v, dS_v, min_value
+from firedrake import Constant, exp, max_value, inner, dx, ds_v, dS_v
+from firedrake.petsc import PETSc
 import icepack
 from icepack.calculus import grad
 from icepack2.constants import (
@@ -17,6 +17,9 @@ from icepack2.constants import (
 from icepack2.model import hybrid
 from icepack2 import model
 import irksome
+from mpi4py import MPI
+
+import matplotlib.pyplot as plt
 
 TEST = True
 CUSTOMH = True
@@ -75,7 +78,7 @@ z.sub(0).assign(u_in)
 bedmachine = xarray.open_dataset(icepack.datasets.fetch_bedmachine_greenland())
 b = icepack.interpolate(bedmachine["bed"], Q)
 h = firedrake.project(h, Δ)
-s = firedrake.project(max_value(b + h, (1 - ρ_I / ρ_W) * h), Δ)
+s = firedrake.Function(Δ).interpolate(max_value(b + h, (1 - ρ_I / ρ_W) * h))
 
 rheology_steps = 5
 ms = np.linspace(1.0, weertman_sliding_law, rheology_steps)
@@ -87,9 +90,9 @@ n_flow = firedrake.Constant(ns[0])
 # Set up the momentum balance equation and solve
 A = icepack.rate_factor(Constant(260))
 ε_c = Constant(A * τ_c ** glen_flow_law)
-print(f"τ_c: {1000 * float(τ_c):.1f} kPa")
-print(f"ε_c: {1000 * float(ε_c):.1f} (m / yr) / km")
-print(f"u_c: {float(u_c):.1f} m / yr")
+PETSc.Sys.Print(f"τ_c: {1000 * float(τ_c):.1f} kPa")
+PETSc.Sys.Print(f"ε_c: {1000 * float(ε_c):.1f} (m / yr) / km")
+PETSc.Sys.Print(f"u_c: {float(u_c):.1f} m / yr")
 
 u, Mx, Mz, τ = firedrake.split(z)
 fields = {
@@ -125,13 +128,14 @@ linear_rheology = {
     "sliding_coefficient": u_c / τ_c * exp(q),
 }
 
-# L_1 = hybrid.HybridModel(calving_terminus=None).action(**fields, **linear_rheology)
-# F_1 = firedrake.derivative(L_1, z)
-# J_1 = firedrake.derivative(F_1, z)
-# L_r = hybrid.HybridModel(calving_terminus=None).action(**rfields, **rheology)
-# F_r = firedrake.derivative(L_r, z)
-# J_r = firedrake.derivative(F_r, z)
-# J = J_r + α * J_1
+α = Constant(0.01)
+L_1 = hybrid.HybridModel(calving_terminus=None).action(**fields, **linear_rheology)
+F_1 = firedrake.derivative(L_1, z)
+J_1 = firedrake.derivative(F_1, z)
+L_r = hybrid.HybridModel(calving_terminus=None).action(**rfields, **rheology)
+F_r = firedrake.derivative(L_r, z)
+J_r = firedrake.derivative(F_r, z)
+J = J_r + α * J_1
 
 L = hybrid.HybridModel(calving_terminus=None).action(**fields, **rheology)
 F = firedrake.derivative(L, z)
@@ -149,7 +153,7 @@ problem_params = {
 }
 solver_params = {
     "solver_parameters": {
-        #"snes_linesearch_monitor": None,
+        # "snes_linesearch_monitor": None,
         #"snes_converged_reason": None,
         #"ksp_monitor": None,
         #"ksp_view": None,
@@ -161,7 +165,7 @@ solver_params = {
         "snes_linesearch_type": "nleqerr",
         "ksp_type": "gmres",
         "pc_type": "lu",
-        "pc_factor_mat_solver_type": "umfpack",
+        "pc_factor_mat_solver_type": "mumps",
     },
 }
 if args.debug:
@@ -169,7 +173,7 @@ if args.debug:
     solver_params["solver_parameters"]["ksp_monitor"] = None
 # firedrake.solve(F_1 == 0, z, **problem_params, **solver_params)
 
-u_problem = firedrake.NonlinearVariationalProblem(F, z, **problem_params)  # may need to add J=J here
+u_problem = firedrake.NonlinearVariationalProblem(F, z, J=J, **problem_params)  # may need to add J=J here
 u_solver = firedrake.NonlinearVariationalSolver(u_problem, **solver_params)
 for rheo_step in range(rheology_steps):
     m_slide.assign(ms[rheo_step])
@@ -274,7 +278,7 @@ with firedrake.CheckpointFile(args.output, "w") as chk:
     timesteps = np.linspace(0.0, args.final_time, num_steps)
     chk.h5pyfile.create_dataset("timesteps", data=timesteps)
 
-    for step in tqdm.trange(num_steps):
+    for step in tqdm.trange(num_steps, disable=MPI.COMM_WORLD.rank > 0):
         t.assign(t + dt)
         if args.calving:
             μ_solver.solve()

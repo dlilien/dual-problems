@@ -35,7 +35,13 @@ kangerdlugssuaq-extrapolated.h5: extrapolate.py kangerdlugssuaq-initial.h5
 kangerdlugssuaq-initial.h5: initialize.py
 	python initialize.py
 
-kangerdlugssuaq-year1-bp.h5: simulate_bp.py kangerdlugssuaq-extrapolated.h5
+kangerdlugssuaq-extrapolated-bp.h5: extrapolate_bp.py kangerdlugssuaq-initial-bp.h5
+	python extrapolate_bp.py
+
+kangerdlugssuaq-initial-bp.h5: initialize_bp.py kangerdlugssuaq-initial.h5
+	python initialize_bp.py
+
+kangerdlugssuaq-year1-bp.h5: simulate_bp.py kangerdlugssuaq-extrapolated-bp.h5
 	python simulate_bp.py \
 		--input kangerdlugssuaq-extrapolated-bp.h5 \
 		--final-time 1.0 \
