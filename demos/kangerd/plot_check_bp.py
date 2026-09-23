@@ -196,7 +196,7 @@ def plot_sliding_coeffs(K, q, output):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="kangerdlugssuaq-check-bp.h5")
-    parser.add_argument("--input-2d", default="kangerdlugssuaq-initial-bp.h5")
+    parser.add_argument("--input-primal", default="kangerdlugssuaq-initial-bp.h5")
     parser.add_argument("--mesh-name", default=None)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
@@ -207,16 +207,16 @@ def main():
         output = input_filename.with_suffix("").name
 
     u, u_in, basal_stress, K, q = load_velocities(input_filename, args.mesh_name)
-    u_primal_b, u_primal_t = load_primal_velocity(args.input_2d)
+    _, u_primal_t = load_primal_velocity(args.input_primal)
     u_t = extract_surface(u)
-    u_b = extract_bed(u)
-    u_in_t = extract_surface(u_in)
-    u_in_b = extract_bed(u_in)
-    u_2d_on_u_t = firedrake.Function(u_t).interpolate(u_primal_t)
-    u_2d_on_u_in_t = firedrake.Function(u_in_t).interpolate(u_primal_t)
+    Q = u_t.function_space()
+    u_b = firedrake.Function(Q).interpolate(extract_bed(u))
+    u_t_in = firedrake.Function(Q).interpolate(extract_surface(u_in))
+    u_b_in = firedrake.Function(Q).interpolate(extract_bed(u_in))
+    u_t_primal = firedrake.Function(Q).interpolate(u_primal_t)
 
     plot_velocity_comparison(
-        u_in_t,
+        u_b_in,
         u_t,
         r"$u_{in}$ surface",
         r"$u$ surface",
@@ -230,25 +230,25 @@ def main():
         f"{output}-sliding.pdf",
     )
     plot_velocity_comparison(
-        u_in_b,
-        u_in_t,
+        u_b_in,
+        u_t_in,
         r"$u_{in}$ bed",
         r"$u_{in}$ surface",
         f"{output}-sliding-in.pdf",
     )
     plot_velocity_comparison(
-        u_2d_on_u_t,
+        u_t_primal,
         u_t,
         "2D",
         r"$u$ surface",
-        f"{output}-vel-2d.pdf",
+        f"{output}-vel-primal-dual.pdf",
     )
     plot_velocity_comparison(
-        u_2d_on_u_in_t,
-        u_in_t,
+        u_t_primal,
+        u_t_in,
         "2D",
         r"$u_{in}$ surface",
-        f"{output}-vel-in-2d.pdf",
+        f"{output}-vel-in-primal.pdf",
     )
     plot_basal_stress(basal_stress, f"{output}-basal-stress.pdf")
     plot_sliding_coeffs(K, q, f"{output}-sliding-coeff.pdf")
@@ -258,8 +258,8 @@ def main():
         f"{output}-vel.pdf",
         f"{output}-sliding.pdf",
         f"{output}-sliding-in.pdf",
-        f"{output}-vel-2d.pdf",
-        f"{output}-vel-in-2d.pdf",
+        f"{output}-vel-primal-dual.pdf",
+        f"{output}-vel-in-primal.pdf",
         f"{output}-basal-stress.pdf",
         f"{output}-sliding-coeff.pdf",
     )

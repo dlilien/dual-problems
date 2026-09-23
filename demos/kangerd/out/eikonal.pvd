@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<VTKFile type="Collection" version="0.1" byte_order="LittleEndian">
+<Collection>
+<DataSet timestep="0" file="eikonal/eikonal_0.vtu" />
+<DataSet timestep="1" file="eikonal/eikonal_1.vtu" />
+<DataSet timestep="2" file="eikonal/eikonal_2.vtu" />
+<DataSet timestep="3" file="eikonal/eikonal_3.vtu" />
+<DataSet timestep="4" file="eikonal/eikonal_4.vtu" />
+<DataSet timestep="5" file="eikonal/eikonal_5.vtu" />
+<DataSet timestep="6" file="eikonal/eikonal_6.vtu" />
+<DataSet timestep="7" file="eikonal/eikonal_7.vtu" />
+<DataSet timestep="8" file="eikonal/eikonal_8.vtu" />
+<DataSet timestep="9" file="eikonal/eikonal_9.vtu" />
+<DataSet timestep="10" file="eikonal/eikonal_10.vtu" />
+<DataSet timestep="11" file="eikonal/eikonal_11.vtu" />
+<DataSet timestep="12" file="eikonal/eikonal_12.vtu" />
+<DataSet timestep="13" file="eikonal/eikonal_13.vtu" />
+<DataSet timestep="14" file="eikonal/eikonal_14.vtu" />
+<DataSet timestep="15" file="eikonal/eikonal_15.vtu" />
+<DataSet timestep="16" file="eikonal/eikonal_16.vtu" />
+<DataSet timestep="17" file="eikonal/eikonal_17.vtu" />
+<DataSet timestep="18" file="eikonal/eikonal_18.vtu" />
+</Collection>
+</VTKFile>

@@ -19,7 +19,15 @@ from icepack2 import model
 import irksome
 from mpi4py import MPI
 
-import matplotlib.pyplot as plt
+# These scales can be used for non-dimensionalization. From Greve 2025.
+TAU_SCALE = 0.1 #0.1  # 100 kPa
+EPS_SCALE = 0.05 #0.025  # per year
+
+
+def nondim_A(A, n, τ_c=TAU_SCALE, ε_c=EPS_SCALE):
+    """Calculate A_tilde from Greve 2025."""
+    return A / (ε_c / τ_c ** n)
+
 
 TEST = True
 CUSTOMH = True
@@ -88,8 +96,10 @@ m_slide = firedrake.Constant(ms[0])
 n_flow = firedrake.Constant(ns[0])
 
 # Set up the momentum balance equation and solve
-A = icepack.rate_factor(Constant(260))
-ε_c = Constant(A * τ_c ** glen_flow_law)
+A3 = icepack.rate_factor(Constant(260))
+ε_c = Constant(A3 * τ_c ** glen_flow_law)
+A_tilde = nondim_A(A3, 3.0, τ_c=τ_c, ε_c=ε_c)
+
 PETSc.Sys.Print(f"τ_c: {1000 * float(τ_c):.1f} kPa")
 PETSc.Sys.Print(f"ε_c: {1000 * float(ε_c):.1f} (m / yr) / km")
 PETSc.Sys.Print(f"u_c: {float(u_c):.1f} m / yr")
@@ -116,14 +126,14 @@ rfields = {
 
 rheology = {
     "flow_law_exponent": n_flow,
-    "flow_law_coefficient": ε_c / τ_c**n_flow,
+    "flow_law_coefficient": A_tilde * ε_c / τ_c**n_flow,
     "sliding_exponent": m_slide,
     "sliding_coefficient": u_c / τ_c**m_slide * exp(m_slide * q),
 }
 
 linear_rheology = {
     "flow_law_exponent": 1,
-    "flow_law_coefficient": ε_c / τ_c,
+    "flow_law_coefficient": A_tilde * EPS_SCALE / TAU_SCALE,
     "sliding_exponent": 1,
     "sliding_coefficient": u_c / τ_c * exp(q),
 }

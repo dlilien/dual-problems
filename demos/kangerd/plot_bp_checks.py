@@ -54,7 +54,7 @@ def load(filename, requested_idx, extruded=False):
             surface = chk.load_function(mesh, name="surface", idx=idx)
         except (KeyError, RuntimeError):
             surface = None
-    if velocity.function_space().mesh().topological_dimension() == 3:
+    if velocity.function_space().mesh().topological_dimension == 3:
         da_vel = icepack.depth_average(velocity)
         b_vel = extract_bed(velocity)
         t_vel = extract_surface(velocity)
